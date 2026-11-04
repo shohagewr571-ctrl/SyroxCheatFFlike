@@ -1,0 +1,306 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#f5f7fc">
+<title>SYROX FREE LIKE</title>
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+
+body{
+ font-family:Arial,sans-serif;
+ min-height:100vh;
+ background:linear-gradient(145deg,#f5f7fc,#edf1f8);
+ color:#202638;
+ display:flex;
+ justify-content:center;
+ align-items:center;
+ padding:20px;
+}
+
+.app{width:100%;max-width:420px}
+
+.header{text-align:center;margin-bottom:22px}
+
+.logo{
+ width:65px;height:65px;
+ display:flex;align-items:center;justify-content:center;
+ background:white;border-radius:22px;
+ margin:0 auto 12px;
+ font-size:34px;
+ box-shadow:0 8px 25px #0000000b;
+}
+
+h1{font-size:25px;font-weight:800}
+.subtitle{font-size:12px;color:#9299a8;margin-top:7px}
+
+.card{
+ background:rgba(255,255,255,.88);
+ border:1px solid #ffffff;
+ border-radius:25px;
+ padding:24px;
+ box-shadow:0 15px 45px #25365b12;
+}
+
+.banner{
+ background:linear-gradient(120deg,#fff0d9,#fff9ec);
+ padding:20px;border-radius:17px;
+ text-align:center;margin-bottom:22px;
+}
+
+.banner strong{color:#e59a24;font-size:21px}
+.banner p{font-size:12px;color:#9299a8;margin-top:7px}
+
+label{
+ display:block;font-size:13px;
+ font-weight:700;margin:18px 0 9px;
+}
+
+input,select{
+ width:100%;padding:15px;
+ border:1px solid #e6e9f0;
+ background:#f8f9fc;
+ border-radius:13px;
+ outline:none;font-size:14px;
+ color:#303849;
+}
+
+input:focus,select:focus{border-color:#f2aa36}
+
+button{
+ width:100%;border:0;border-radius:14px;
+ padding:16px;margin-top:22px;
+ background:linear-gradient(110deg,#ffb83d,#f69a19);
+ color:white;font-weight:800;
+ font-size:15px;cursor:pointer;
+ box-shadow:0 8px 20px #f5a52c30;
+}
+
+button:disabled{opacity:.6;cursor:not-allowed}
+
+.status{
+ display:none;margin-top:18px;padding:15px;
+ border-radius:13px;text-align:center;
+ font-size:13px;line-height:1.6;
+ overflow-wrap:anywhere;
+}
+
+.success{display:block;background:#e9f9ef;color:#18864b}
+.error{display:block;background:#fff0ef;color:#c83d36}
+.info{display:block;background:#edf4ff;color:#3265a9}
+
+.small{
+ text-align:center;color:#9299a8;
+ font-size:12px;margin-top:16px;
+}
+
+.footer{
+ text-align:center;color:#a2a7b2;
+ font-size:11px;margin-top:20px;
+}
+
+.heart{color:#ef6464}
+</style>
+</head>
+
+<body>
+<div class="app">
+
+ <header class="header">
+  <div class="logo">🔥</div>
+  <h1>SYROX FREE LIKE</h1>
+  <div class="subtitle">FREE FIRE DAILY LIKES SERVICE</div>
+ </header>
+
+ <main class="card">
+
+  <div class="banner">
+   <strong>Get Free Likes <span class="heart">♥</span></strong>
+   <p>Increase your Free Fire popularity</p>
+  </div>
+
+  <form id="likeForm">
+
+   <label for="uid">FREE FIRE PLAYER UID</label>
+   <input
+    id="uid"
+    type="text"
+    inputmode="numeric"
+    placeholder="Enter your Player UID"
+    pattern="[0-9]{5,20}"
+    maxlength="20"
+    required
+   >
+
+   <label for="reason">SELECT YOUR REASON</label>
+   <select id="reason" required>
+    <option value="">Choose a reason</option>
+    <option value="Daily Free Likes">Daily Free Likes</option>
+    <option value="Support My Profile">Support My Profile</option>
+    <option value="Increase Popularity">Increase Popularity</option>
+   </select>
+
+   <button id="submitBtn" type="submit">
+    CONTINUE →
+   </button>
+
+  </form>
+
+  <div id="status" class="status" role="status"></div>
+
+  <div class="small">
+   🎁 One free claim per UID per day
+  </div>
+
+ </main>
+
+ <footer class="footer">
+  © 2026 SYROX FREE LIKE
+  <br><br>
+  Powered by SyroxCheat
+ </footer>
+
+</div>
+
+<script>
+/* API CONFIGURATION */
+const API_URL =
+ "https://syroxcheatlikebot.vercel.app/like";
+
+const API_KEY = "SyroxCheat";
+
+/* ELEMENTS */
+const form = document.getElementById("likeForm");
+const uidInput = document.getElementById("uid");
+const reasonInput = document.getElementById("reason");
+const button = document.getElementById("submitBtn");
+const statusBox = document.getElementById("status");
+
+/* LOCAL DAILY DEMO LIMIT */
+function today(){
+ return new Date().toLocaleDateString("en-CA");
+}
+
+function claimKey(uid){
+ return "syrox_free_like_" + uid;
+}
+
+function alreadyClaimed(uid){
+ return localStorage.getItem(claimKey(uid)) === today();
+}
+
+function show(message,type){
+ statusBox.className = "status " + type;
+ statusBox.textContent = message;
+}
+
+/* API REQUEST */
+form.addEventListener("submit",async function(e){
+
+ e.preventDefault();
+
+ const uid = uidInput.value.trim();
+ const reason = reasonInput.value;
+
+ if(!/^[0-9]{5,20}$/.test(uid)){
+  show("Please enter a valid Free Fire UID.","error");
+  return;
+ }
+
+ if(!reason){
+  show("Please select a reason.","error");
+  return;
+ }
+
+ if(alreadyClaimed(uid)){
+  show(
+   "You have already claimed your daily likes. Please try tomorrow!",
+   "error"
+  );
+  return;
+ }
+
+ button.disabled = true;
+ button.textContent = "PROCESSING...";
+
+ show("Connecting to Syrox Likes API...","info");
+
+ try{
+
+  const url = new URL(API_URL);
+
+  url.searchParams.set("uid",uid);
+  url.searchParams.set("key",API_KEY);
+
+  const response = await fetch(url.toString(),{
+   method:"GET",
+   headers:{
+    "Accept":"application/json"
+   }
+  });
+
+  const raw = await response.text();
+
+  let data;
+
+  try{
+   data = JSON.parse(raw);
+  }catch{
+   data = {message:raw};
+  }
+
+  if(!response.ok){
+   throw new Error(
+    data.message || "API request failed: " + response.status
+   );
+  }
+
+  if(
+   data.status === "error" ||
+   data.success === false ||
+   data.error
+  ){
+   throw new Error(
+    data.message || data.error || "Likes request failed."
+   );
+  }
+
+  /* SAVE DAILY CLAIM */
+  localStorage.setItem(claimKey(uid),today());
+
+  const likes =
+   data.likes_sent ?? data.likes ?? data.total_likes;
+
+  show(
+   "✅ Request completed!\n" +
+   (likes != null
+    ? likes + " Likes delivered."
+    : (data.message || "API accepted the request.")),
+   "success"
+  );
+
+ }catch(error){
+
+  show(
+   "❌ " +
+   (error.message.includes("Failed to fetch")
+    ? "Connection or CORS error. Please check API access."
+    : error.message),
+   "error"
+  );
+
+ }finally{
+
+  button.disabled = false;
+  button.textContent = "CONTINUE →";
+
+ }
+
+});
+</script>
+
+</body>
+</html>
