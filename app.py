@@ -210,17 +210,45 @@ def make_request(encrypt, region, token):
             "X-GA": "v1 1",
             "ReleaseVersion": "OB55",
         }
-        response = requests.post(url, data=edata, headers=headers, verify=False, timeout=15)
-        binary = response.content
+        # Verify TLS certificates; do not silently decode an HTTP error page as protobuf.
+        response = requests.post(url, data=edata, headers=headers, verify=True, timeout=20)
+        if not response.ok:
+            body_preview = (response.text or "")[:200].replace("\n", " ").replace("\r", " ")
+            app.logger.error(
+                "Player-info upstream HTTP %s; content-type=%s; body=%r",
+                response.status_code,
+                response.headers.get("Content-Type", "unknown"),
+                body_preview,
+            )
+            return None
+        if not response.content:
+            app.logger.error("Player-info upstream returned an empty response (HTTP %s)", response.status_code)
+            return None
+
         decoded = visit_count_pb2.Info()
-        decoded.ParseFromString(binary)
+        decoded.ParseFromString(response.content)
+        # A successful protobuf parse should contain the expected account field.
+        if not decoded.HasField("AccountInfo"):
+            app.logger.error("Player-info response decoded but AccountInfo is missing")
+            return None
         return decoded
     except DecodeError as e:
-        app.logger.error(f"DecodeError: {e}")
+        app.logger.error("Player-info response was not a valid expected protobuf: %s", e)
+        return None
+    except requests.Timeout:
+        app.logger.error("Player-info upstream request timed out")
+        return None
+    except requests.RequestException as e:
+        app.logger.error("Player-info upstream network/TLS error: %s", e)
         return None
     except Exception as e:
-        app.logger.error(f"Error in make_request: {e}")
+        app.logger.exception("Unexpected error in make_request: %s", e)
         return None
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok", "service": "Syrox Free Fire Like API"}), 200
 
 
 @app.route("/", methods=["GET"])
@@ -273,7 +301,11 @@ def handle_requests():
 
         before = make_request(encrypted_uid, region, token)
         if before is None:
-            raise Exception("Failed to get initial player info. Token may be expired.")
+            raise Exception(
+                "Player-info lookup failed. Check Vercel logs for the upstream HTTP status, "
+                "TLS/network error, or protobuf decode error. A JWT marked valid only means "
+                "its expiry claim has not passed; it does not prove the game server accepts it."
+            )
 
         before_like = before.AccountInfo.Likes
 
@@ -288,7 +320,7 @@ def handle_requests():
 
         after = make_request(encrypted_uid, region, token)
         if after is None:
-            raise Exception("Failed to get final player info.")
+            raise Exception("Final player-info lookup failed; check Vercel logs for the upstream response details.")
 
         after_like = after.AccountInfo.Likes
         like_given = after_like - before_like
@@ -399,6 +431,7 @@ def token_status():
     return jsonify({
         "tokens": status,
         "accounts_configured": len(accounts),
+        "validity_basis": "JWT expiry claim only; this does not confirm acceptance by the game server.",
     })
 
 
