@@ -23,6 +23,25 @@ except Exception:
 
 app = Flask(__name__)
 
+
+# ---- CORS: allow the website (any origin, incl. local file) to call this API ----
+@app.after_request
+def add_cors_headers(resp):
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Accept, Authorization"
+    resp.headers["Access-Control-Max-Age"] = "86400"
+    return resp
+
+
+@app.route("/like", methods=["OPTIONS"])
+@app.route("/remain", methods=["OPTIONS"])
+@app.route("/refresh", methods=["OPTIONS"])
+@app.route("/token-status", methods=["OPTIONS"])
+def cors_preflight():
+    return ("", 204)
+
+
 # API key(s)
 VALID_API_KEYS = {
     "SyroxCheat",
