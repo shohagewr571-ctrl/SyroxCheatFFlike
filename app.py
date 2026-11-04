@@ -236,10 +236,27 @@ def make_request(encrypt, region, token):
         app.logger.error("Player-info response was not a valid expected protobuf: %s", e)
         return None
     except requests.Timeout:
-        app.logger.error("Player-info upstream request timed out")
+        app.logger.error(
+            "Player-info upstream request timed out. Check the configured host and "
+            "whether the upstream service is reachable from the deployment region."
+        )
+        return None
+    except requests.ConnectionError as e:
+        # DNS resolution failures are not caused by JWT expiry or TLS verification.
+        detail = str(e)
+        lowered = detail.lower()
+        if "nameresolutionerror" in lowered or "failed to resolve" in lowered or "name or service not known" in lowered:
+            app.logger.error(
+                "Player-info DNS lookup failed for the configured upstream host. "
+                "Verify that the hostname is correct, currently exists, and has a "
+                "working DNS record. Original error: %s",
+                detail,
+            )
+        else:
+            app.logger.error("Player-info upstream connection error: %s", detail)
         return None
     except requests.RequestException as e:
-        app.logger.error("Player-info upstream network/TLS error: %s", e)
+        app.logger.error("Player-info upstream HTTP/network error: %s", e)
         return None
     except Exception as e:
         app.logger.exception("Unexpected error in make_request: %s", e)
@@ -302,9 +319,9 @@ def handle_requests():
         before = make_request(encrypted_uid, region, token)
         if before is None:
             raise Exception(
-                "Player-info lookup failed. Check Vercel logs for the upstream HTTP status, "
-                "TLS/network error, or protobuf decode error. A JWT marked valid only means "
-                "its expiry claim has not passed; it does not prove the game server accepts it."
+                "Player-info lookup failed. Check the detailed Runtime Log. "
+                "If it reports DNS lookup failure, the configured upstream hostname "
+                "must be verified with the API provider; changing the JWT will not fix DNS."
             )
 
         before_like = before.AccountInfo.Likes
