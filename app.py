@@ -2,114 +2,59 @@ from flask import Flask, request, jsonify
 import asyncio
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
+from google.protobuf.json_format import MessageToJson
 import binascii
 import aiohttp
 import requests
 import json
-import os
+from pathlib import Path
 import like_pb2
+import like_count_pb2
 import uid_generator_pb2
-import visit_count_pb2
 from google.protobuf.message import DecodeError
-from collections import OrderedDict
-
-try:
-    from token_refresh import ensure_tokens, refresh_all, load_accounts, token_is_valid
-except Exception:
-    ensure_tokens = None
-    refresh_all = None
-    load_accounts = None
-    token_is_valid = None
 
 app = Flask(__name__)
 
+def load_tokens(server_name):
+    """Load region tokens from a JSON file beside this app.py.
 
-# ---- CORS: allow the website (any origin, incl. local file) to call this API ----
-@app.after_request
-def add_cors_headers(resp):
-    resp.headers["Access-Control-Allow-Origin"] = "*"
-    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Accept, Authorization"
-    resp.headers["Access-Control-Max-Age"] = "86400"
-    return resp
-
-
-@app.route("/like", methods=["OPTIONS"])
-@app.route("/remain", methods=["OPTIONS"])
-@app.route("/refresh", methods=["OPTIONS"])
-@app.route("/token-status", methods=["OPTIONS"])
-def cors_preflight():
-    return ("", 204)
-
-
-# API key(s)
-VALID_API_KEYS = {
-    "SyroxCheat",
-}
-
-# Like limit (in-memory; resets on restart)
-daily_limit = 20
-used_count = 0
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-
-def load_tokens(region):
+    Expected format: [{"token": "ACCESS_TOKEN"}, ...]
+    This project currently includes only token_bd.json; other regions need
+    their corresponding token file before they can be used.
     """
-    Load tokens for region.
-    Auto-refresh via token_refresh.ensure_tokens() when accounts.json has guest uid/password.
-    Falls back to existing token_*.json files.
-    """
-    region = (region or "").upper()
+    region = (server_name or "BD").upper()
+    filename = {
+        "IND": "token_ind.json",
+        "BR": "token_br.json", "US": "token_br.json",
+        "SAC": "token_br.json", "NA": "token_br.json",
+    }.get(region, "token_bd.json")
+    token_path = Path(__file__).resolve().parent / filename
     try:
-        # 1) try auto refresh / valid tokens
-        if ensure_tokens is not None:
-            tokens = ensure_tokens(region)
-            if tokens:
-                # keep only entries that look like JWT
-                cleaned = []
-                for t in tokens:
-                    tok = t.get("token") if isinstance(t, dict) else None
-                    if tok and isinstance(tok, str) and tok.startswith("eyJ"):
-                        cleaned.append({"token": tok})
-                if cleaned:
-                    return cleaned
-
-        # 2) plain file fallback
-        if region == "IND":
-            path = os.path.join(BASE_DIR, "token_ind.json")
-        elif region in {"BR", "US", "SAC", "NA"}:
-            path = os.path.join(BASE_DIR, "token_br.json")
-        else:
-            path = os.path.join(BASE_DIR, "token_bd.json")
-
-        if not os.path.exists(path) or os.path.getsize(path) == 0:
-            path = os.path.join(BASE_DIR, "token_bd.json")
-
-        with open(path, "r", encoding="utf-8") as f:
+        with token_path.open("r", encoding="utf-8") as f:
             tokens = json.load(f)
-
-        if not tokens or not isinstance(tokens, list):
-            app.logger.error(f"No tokens found for region {region}")
-            return None
-        return tokens
-    except Exception as e:
-        app.logger.error(f"Error loading tokens for region {region}: {e}")
-        return None
-
+        if not isinstance(tokens, list) or not tokens:
+            raise ValueError(f"{filename} must contain a non-empty JSON list")
+        valid = [item for item in tokens if isinstance(item, dict) and isinstance(item.get("token"), str) and item["token"].strip()]
+        if not valid:
+            raise ValueError(f"{filename} must contain objects with a non-empty 'token' field")
+        return valid
+    except FileNotFoundError:
+        app.logger.error("Token file not found: %s", token_path)
+    except (OSError, json.JSONDecodeError, ValueError) as e:
+        app.logger.error("Invalid token file %s: %s", token_path, e)
+    return None
 
 def encrypt_message(plaintext):
     try:
-        key = b"Yg&tc%DEuh6%Zc^8"
-        iv = b"6oyZDr22E3ychjM%"
+        key = b'Yg&tc%DEuh6%Zc^8'
+        iv = b'6oyZDr22E3ychjM%'
         cipher = AES.new(key, AES.MODE_CBC, iv)
         padded_message = pad(plaintext, AES.block_size)
         encrypted_message = cipher.encrypt(padded_message)
-        return binascii.hexlify(encrypted_message).decode("utf-8")
+        return binascii.hexlify(encrypted_message).decode('utf-8')
     except Exception as e:
         app.logger.error(f"Error encrypting message: {e}")
         return None
-
 
 def create_protobuf_message(user_id, region):
     try:
@@ -121,46 +66,47 @@ def create_protobuf_message(user_id, region):
         app.logger.error(f"Error creating protobuf message: {e}")
         return None
 
-
 async def send_request(encrypted_uid, token, url):
     try:
         edata = bytes.fromhex(encrypted_uid)
         headers = {
-            "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)",
-            "Connection": "Keep-Alive",
-            "Accept-Encoding": "gzip",
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Expect": "100-continue",
-            "X-Unity-Version": "2018.4.11f1",
-            "X-GA": "v1 1",
-            "ReleaseVersion": "OB55",
+            'User-Agent': "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)",
+            'Connection': "Keep-Alive",
+            'Accept-Encoding': "gzip",
+            'Authorization': f"Bearer {token}",
+            'Content-Type': "application/x-www-form-urlencoded",
+            'Expect': "100-continue",
+            'X-Unity-Version': "2018.4.11f1",
+            'X-GA': "v1 1",
+            'ReleaseVersion': "OB55"
         }
-        timeout = aiohttp.ClientTimeout(total=15)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(url, data=edata, headers=headers, ssl=False) as response:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data=edata, headers=headers) as response:
+                if response.status != 200:
+                    app.logger.error(f"Request failed with status code: {response.status}")
+                    return response.status
                 return await response.text()
     except Exception as e:
         app.logger.error(f"Exception in send_request: {e}")
         return None
 
-
-async def send_multiple_requests(uid, region, url, max_requests=50):
+async def send_multiple_requests(uid, server_name, url):
     try:
+        region = server_name
         protobuf_message = create_protobuf_message(uid, region)
         if protobuf_message is None:
+            app.logger.error("Failed to create protobuf message.")
             return None
         encrypted_uid = encrypt_message(protobuf_message)
         if encrypted_uid is None:
+            app.logger.error("Encryption failed.")
             return None
-        tokens = load_tokens(region)
-        if tokens is None or len(tokens) == 0:
-            return None
-
         tasks = []
-        # limit parallel calls to avoid hammering
-        count = min(max_requests, max(len(tokens) * 10, 10))
-        for i in range(count):
+        tokens = load_tokens(server_name)
+        if tokens is None:
+            app.logger.error("Failed to load tokens.")
+            return None
+        for i in range(100):
             token = tokens[i % len(tokens)]["token"]
             tasks.append(send_request(encrypted_uid, token, url))
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -168,7 +114,6 @@ async def send_multiple_requests(uid, region, url, max_requests=50):
     except Exception as e:
         app.logger.error(f"Exception in send_multiple_requests: {e}")
         return None
-
 
 def create_protobuf(uid):
     try:
@@ -180,277 +125,168 @@ def create_protobuf(uid):
         app.logger.error(f"Error creating uid protobuf: {e}")
         return None
 
-
 def enc(uid):
     protobuf_data = create_protobuf(uid)
     if protobuf_data is None:
         return None
-    return encrypt_message(protobuf_data)
+    encrypted_uid = encrypt_message(protobuf_data)
+    return encrypted_uid
 
-
-def make_request(encrypt, region, token):
+def make_request(encrypt, server_name, token):
     try:
-        region = (region or "").upper()
-        if region == "IND":
+        if server_name == "IND":
             url = "https://client.ind.freefiremobile.com/GetPlayerPersonalShow"
-        elif region in {"BR", "US", "SAC", "NA"}:
+        elif server_name in {"BR", "US", "SAC", "NA"}:
             url = "https://client.us.freefiremobile.com/GetPlayerPersonalShow"
         else:
-            url = "https://clientbp.ggpolarbear.com/GetPlayerPersonalShow"
-
+            url = "https://clientbp.ggblueshark.com/GetPlayerPersonalShow"
         edata = bytes.fromhex(encrypt)
         headers = {
-            "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)",
-            "Connection": "Keep-Alive",
-            "Accept-Encoding": "gzip",
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Expect": "100-continue",
-            "X-Unity-Version": "2018.4.11f1",
-            "X-GA": "v1 1",
-            "ReleaseVersion": "OB55",
+            'User-Agent': "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)",
+            'Connection': "Keep-Alive",
+            'Accept-Encoding': "gzip",
+            'Authorization': f"Bearer {token}",
+            'Content-Type': "application/x-www-form-urlencoded",
+            'Expect': "100-continue",
+            'X-Unity-Version': "2018.4.11f1",
+            'X-GA': "v1 1",
+            'ReleaseVersion': "OB55"
         }
-        # Verify TLS certificates; do not silently decode an HTTP error page as protobuf.
-        response = requests.post(url, data=edata, headers=headers, verify=True, timeout=20)
-        if not response.ok:
-            body_preview = (response.text or "")[:200].replace("\n", " ").replace("\r", " ")
-            app.logger.error(
-                "Player-info upstream HTTP %s; content-type=%s; body=%r",
-                response.status_code,
-                response.headers.get("Content-Type", "unknown"),
-                body_preview,
-            )
-            return None
-        if not response.content:
-            app.logger.error("Player-info upstream returned an empty response (HTTP %s)", response.status_code)
-            return None
+        response = requests.post(url, data=edata, headers=headers, timeout=(8, 20))
+        response.raise_for_status()
+        hex_data = response.content.hex()
+        binary = bytes.fromhex(hex_data)
+        decode = decode_protobuf(binary)
+        if decode is None:
+            app.logger.error("Protobuf decoding returned None.")
+        return decode
+    except Exception as e:
+        app.logger.error(f"Error in make_request: {e}")
+        return None
 
-        decoded = visit_count_pb2.Info()
-        decoded.ParseFromString(response.content)
-        # A successful protobuf parse should contain the expected account field.
-        if not decoded.HasField("AccountInfo"):
-            app.logger.error("Player-info response decoded but AccountInfo is missing")
-            return None
-        return decoded
+def decode_protobuf(binary):
+    try:
+        items = like_count_pb2.Info()
+        items.ParseFromString(binary)
+        return items
     except DecodeError as e:
-        app.logger.error("Player-info response was not a valid expected protobuf: %s", e)
-        return None
-    except requests.Timeout:
-        app.logger.error(
-            "Player-info upstream request timed out. Check the configured host and "
-            "whether the upstream service is reachable from the deployment region."
-        )
-        return None
-    except requests.ConnectionError as e:
-        # DNS resolution failures are not caused by JWT expiry or TLS verification.
-        detail = str(e)
-        lowered = detail.lower()
-        if "nameresolutionerror" in lowered or "failed to resolve" in lowered or "name or service not known" in lowered:
-            app.logger.error(
-                "Player-info DNS lookup failed for the configured upstream host. "
-                "Verify that the hostname is correct, currently exists, and has a "
-                "working DNS record. Original error: %s",
-                detail,
-            )
-        else:
-            app.logger.error("Player-info upstream connection error: %s", detail)
-        return None
-    except requests.RequestException as e:
-        app.logger.error("Player-info upstream HTTP/network error: %s", e)
+        app.logger.error(f"Error decoding Protobuf data: {e}")
         return None
     except Exception as e:
-        app.logger.exception("Unexpected error in make_request: %s", e)
+        app.logger.error(f"Unexpected error during protobuf decoding: {e}")
         return None
 
+def fetch_player_info(uid):
+    try:
+        url = f"https://nr-codex-info.vercel.app/get?uid={uid}"
+        response = requests.get(url, timeout=(5, 10))
+        if response.status_code == 200:
+            data = response.json()
+            account_info = data.get("AccountInfo", {})
+            return {
+                "Level": account_info.get("AccountLevel", "NA"),
+                "Region": account_info.get("AccountRegion", "NA"),
+                "ReleaseVersion": account_info.get("ReleaseVersion", "NA")
+            }
+        else:
+            app.logger.error(f"Player info API failed with status code: {response.status_code}")
+            return {"Level": "NA", "Region": "NA", "ReleaseVersion": "NA"}
+    except Exception as e:
+        app.logger.error(f"Error fetching player info from API: {e}")
+        return {"Level": "NA", "Region": "NA", "ReleaseVersion": "NA"}
 
-@app.route("/health", methods=["GET"])
-def health():
-    return jsonify({"status": "ok", "service": "Syrox Free Fire Like API"}), 200
-
-
-@app.route("/", methods=["GET"])
-def home():
-    return jsonify({
-        "service": "Syrox Free Fire Like API",
-        "endpoints": {
-            "/like": "GET ?uid=&region=&key=",
-            "/remain": "GET",
-            "/refresh": "GET ?key=&force=1  (auto JWT from accounts.json)",
-            "/token-status": "GET",
-        },
-        "status": "ok",
-    })
-
-
-@app.route("/like", methods=["GET"])
+@app.route('/like', methods=['GET'])
 def handle_requests():
-    global used_count
-
-    api_key = request.args.get("key")
-    if api_key not in VALID_API_KEYS:
-        result = OrderedDict([
-            ("error", "Invalid or missing API key"),
-            ("status", 3),
-        ])
-        return app.response_class(
-            response=json.dumps(result, separators=(",", ":")),
-            status=401,
-            mimetype="application/json",
-        )
-
     uid = request.args.get("uid")
-    region = (request.args.get("region") or "").upper()
-    if not uid or not region:
-        return jsonify({"error": "UID and region are required", "status": 4}), 400
-
-    if not str(uid).isdigit():
-        return jsonify({"error": "UID must be numeric", "status": 4}), 400
+    server_name = request.args.get("server_name", "").upper()
+    if not uid or not server_name:
+        return jsonify({"error": "UID and server_name are required"}), 400
+    if not uid.isdigit() or not (6 <= len(uid) <= 15):
+        return jsonify({"error": "UID must contain 6 to 15 digits"}), 400
+    allowed_regions = {"BD", "IND", "BR", "US", "SAC", "NA"}
+    if server_name not in allowed_regions:
+        return jsonify({"error": "Unsupported region", "supported": sorted(allowed_regions)}), 400
 
     try:
-        tokens = load_tokens(region)
-        if not tokens:
-            raise Exception("Failed to load tokens. Add tokens to token_*.json")
+        def process_request():
+            # Fetch player info from the new API
+            player_info = fetch_player_info(uid)
+            region = player_info["Region"]
+            level = player_info["Level"]
+            release_version = player_info["ReleaseVersion"]
 
-        token = tokens[0]["token"]
-        encrypted_uid = enc(uid)
-        if encrypted_uid is None:
-            raise Exception("Encryption of UID failed.")
+            # Validate server_name against region from API
+            if region != "NA" and server_name != region:
+                app.logger.warning(f"Server name {server_name} does not match API region {region}. Using API region.")
+                server_name_used = region
+            else:
+                server_name_used = server_name
 
-        before = make_request(encrypted_uid, region, token)
-        if before is None:
-            raise Exception(
-                "Player-info lookup failed. Check the detailed Runtime Log. "
-                "If it reports DNS lookup failure, the configured upstream hostname "
-                "must be verified with the API provider; changing the JWT will not fix DNS."
-            )
+            tokens = load_tokens(server_name_used)
+            if tokens is None:
+                raise Exception("Failed to load tokens.")
+            if not tokens:
+                raise Exception("No valid tokens are configured for this region.")
+            token = tokens[0]["token"]
+            encrypted_uid = enc(uid)
+            if encrypted_uid is None:
+                raise Exception("Encryption of UID failed.")
 
-        before_like = before.AccountInfo.Likes
-
-        if region == "IND":
-            url = "https://client.ind.freefiremobile.com/LikeProfile"
-        elif region in {"BR", "US", "SAC", "NA"}:
-            url = "https://client.us.freefiremobile.com/LikeProfile"
-        else:
-            url = "https://clientbp.ggpolarbear.com/LikeProfile"
-
-        asyncio.run(send_multiple_requests(uid, region, url))
-
-        after = make_request(encrypted_uid, region, token)
-        if after is None:
-            raise Exception("Final player-info lookup failed; check Vercel logs for the upstream response details.")
-
-        after_like = after.AccountInfo.Likes
-        like_given = after_like - before_like
-        status = 1 if like_given > 0 else 2
-
-        if status == 1:
-            used_count += 1
-
-        remaining = max(daily_limit - used_count, 0)
-
-        result = OrderedDict([
-            ("LikesGivenByAPI", like_given),
-            ("LikesafterCommand", after_like),
-            ("LikesbeforeCommand", before_like),
-            ("PlayerNickname", after.AccountInfo.PlayerNickname),
-            ("Level", after.AccountInfo.Levels),
-            ("Region", after.AccountInfo.PlayerRegion),
-            ("UID", after.AccountInfo.UID),
-            ("status", status),
-            ("daily_limit", daily_limit),
-            ("used", used_count),
-            ("remaining", remaining),
-        ])
-
-        return app.response_class(
-            response=json.dumps(result, separators=(",", ":")),
-            status=200,
-            mimetype="application/json",
-        )
-
-    except Exception as e:
-        app.logger.error(f"Error: {e}")
-        return jsonify({"error": str(e), "status": 5}), 500
-
-
-@app.route("/remain", methods=["GET"])
-def remain_info():
-    global used_count
-    remaining = max(daily_limit - used_count, 0)
-    data = {
-        "daily_limit": daily_limit,
-        "remaining": remaining,
-        "used": used_count,
-        "reset_info": "Resets on server restart (in-memory)",
-    }
-    return jsonify(data)
-
-
-@app.route("/refresh", methods=["GET", "POST"])
-def refresh_tokens_route():
-    """
-    Force refresh JWT tokens from accounts.json guest credentials.
-    ?key=SyroxCheat&force=1
-    """
-    api_key = request.args.get("key") or (request.json or {}).get("key") if request.is_json else request.args.get("key")
-    if api_key not in VALID_API_KEYS:
-        return jsonify({"error": "Invalid or missing API key", "status": 3}), 401
-
-    if refresh_all is None:
-        return jsonify({
-            "error": "token_refresh module not available",
-            "hint": "Ensure token_refresh.py is deployed",
-        }), 500
-
-    force = str(request.args.get("force", "1")).lower() in {"1", "true", "yes"}
-    accounts = load_accounts() if load_accounts else []
-    if not accounts:
-        return jsonify({
-            "error": "No guest accounts configured",
-            "hint": "Edit accounts.json with real uid + password (not REPLACE_ placeholders)",
-            "status": 6,
-        }), 400
-
-    result = refresh_all(force=force)
-    return jsonify({
-        "status": 1,
-        "refreshed": result,
-        "accounts_loaded": len(accounts),
-        "message": "Refresh finished. Check token_*.json",
-    })
-
-
-@app.route("/token-status", methods=["GET"])
-def token_status():
-    """Show whether current tokens are still valid (by JWT exp)."""
-    regions = ["BD", "IND", "BR"]
-    status = {}
-    for reg in regions:
-        path_map = {
-            "IND": "token_ind.json",
-            "BR": "token_br.json",
-            "BD": "token_bd.json",
-        }
-        path = os.path.join(BASE_DIR, path_map[reg])
-        items = []
-        if os.path.exists(path) and os.path.getsize(path) > 0:
+            before = make_request(encrypted_uid, server_name_used, token)
+            if before is None:
+                raise Exception("Failed to retrieve initial player info.")
             try:
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                for t in data if isinstance(data, list) else []:
-                    tok = t.get("token", "") if isinstance(t, dict) else ""
-                    ok = token_is_valid(tok) if token_is_valid else None
-                    items.append({"valid": ok, "preview": (tok[:20] + "...") if tok else ""})
+                jsone = MessageToJson(before)
             except Exception as e:
-                items = [{"error": str(e)}]
-        status[reg] = items
-    accounts = load_accounts() if load_accounts else []
-    return jsonify({
-        "tokens": status,
-        "accounts_configured": len(accounts),
-        "validity_basis": "JWT expiry claim only; this does not confirm acceptance by the game server.",
-    })
+                raise Exception(f"Error converting 'before' protobuf to JSON: {e}")
+            data_before = json.loads(jsone)
+            before_like = data_before.get('AccountInfo', {}).get('Likes', 0)
+            try:
+                before_like = int(before_like)
+            except Exception:
+                before_like = 0
+            app.logger.info(f"Likes before command: {before_like}")
 
+            if server_name_used == "IND":
+                url = "https://client.ind.freefiremobile.com/LikeProfile"
+            elif server_name_used in {"BR", "US", "SAC", "NA"}:
+                url = "https://client.us.freefiremobile.com/LikeProfile"
+            else:
+                url = "https://clientbp.ggblueshark.com/LikeProfile"
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
+            asyncio.run(send_multiple_requests(uid, server_name_used, url))
+
+            after = make_request(encrypted_uid, server_name_used, token)
+            if after is None:
+                raise Exception("Failed to retrieve player info after like requests.")
+            try:
+                jsone_after = MessageToJson(after)
+            except Exception as e:
+                raise Exception(f"Error converting 'after' protobuf to JSON: {e}")
+            data_after = json.loads(jsone_after)
+            after_like = int(data_after.get('AccountInfo', {}).get('Likes', 0))
+            player_uid = int(data_after.get('AccountInfo', {}).get('UID', 0))
+            player_name = str(data_after.get('AccountInfo', {}).get('PlayerNickname', ''))
+            like_given = after_like - before_like
+            status = 1 if like_given != 0 else 2
+            result = {
+                "LikesGivenByAPI": like_given,
+                "LikesafterCommand": after_like,
+                "LikesbeforeCommand": before_like,
+                "PlayerNickname": player_name,
+                "Region": region,
+                "Level": level,
+                "UID": player_uid,
+                "ReleaseVersion": release_version,
+                "status": status
+            }
+            return result
+
+        result = process_request()
+        return jsonify(result)
+    except Exception as e:
+        app.logger.error(f"Error processing request: {e}")
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(debug=True, use_reloader=False)
